@@ -1,0 +1,25 @@
+import * as Cucumber from '@cucumber/cucumber';
+import type { APIRequestContext, BrowserContext, Page } from 'playwright';
+// @ts-ignore -- the current package publishes no TypeScript declarations.
+import * as ReportPortalCucumber from '@reportportal/agent-js-cucumber';
+
+// Narrow the untyped package boundary to its documented World contract.
+const RPWorld = ReportPortalCucumber.RPWorld as typeof Cucumber.World;
+
+export class AutomationWorld extends RPWorld {
+  browserContext?: BrowserContext;
+  page?: Page;
+  api?: APIRequestContext;
+  testLinkCaseId?: string;
+  testLinkSuiteId?: string;
+
+  requirePage(): Page {
+    if (!this.page) {
+      throw new Error('Scenario page is unavailable before the Cucumber Before hook');
+    }
+
+    return this.page;
+  }
+}
+
+Cucumber.setWorldConstructor(AutomationWorld);

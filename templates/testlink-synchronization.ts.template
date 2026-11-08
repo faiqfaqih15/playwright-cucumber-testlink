@@ -1,0 +1,37 @@
+export interface TraceabilityMappingInput {
+  sourceTag: string;
+  matchedTargetTags: readonly string[];
+}
+
+export type TraceabilityMappingResult =
+  | { sourceTag: string; status: 'added' }
+  | { sourceTag: string; status: 'mapped'; targetTag: string };
+
+export function classifyTraceabilityMappings(
+  mappings: readonly TraceabilityMappingInput[],
+): TraceabilityMappingResult[] {
+  const sourceTags = new Set<string>();
+  const targetOwners = new Map<string, string>();
+
+  return mappings.map(({ sourceTag, matchedTargetTags }) => {
+    if (sourceTags.has(sourceTag)) {
+      throw new Error(`Traceability mapping is ambiguous: duplicate source ${sourceTag}`);
+    }
+    sourceTags.add(sourceTag);
+
+    if (matchedTargetTags.length === 0) {
+      return { sourceTag, status: 'added' };
+    }
+    if (matchedTargetTags.length !== 1) {
+      throw new Error(`Traceability mapping is ambiguous for ${sourceTag}`);
+    }
+
+    const targetTag = matchedTargetTags[0];
+    const existingOwner = targetOwners.get(targetTag);
+    if (existingOwner && existingOwner !== sourceTag) {
+      throw new Error(`Traceability mapping is ambiguous for target ${targetTag}`);
+    }
+    targetOwners.set(targetTag, sourceTag);
+    return { sourceTag, status: 'mapped', targetTag };
+  });
+}

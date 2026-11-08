@@ -1,0 +1,51 @@
+export const reportPortalConfig = {
+  endpoint: process.env.RP_ENDPOINT ?? 'http://localhost:8080/api/v2',
+  apiKey: process.env.RP_API_KEY,
+  project: process.env.RP_PROJECT ?? 'playwright_automation',
+  launch: process.env.RP_LAUNCH ?? 'Local regression',
+  scenarioBasedStatistics: true,
+};
+
+/**
+ * Register the ReportPortal formatter only when this returns true.
+ * Keep local Cucumber artifacts enabled independently of remote reporting.
+ */
+export function validateReportPortalConfig() {
+  const strictReporting = process.env.RP_STRICT_REPORTING === 'true';
+  const reportingEnabled =
+    strictReporting || process.env.RP_REPORTING_ENABLED === 'true';
+
+  if (!reportingEnabled) {
+    return false;
+  }
+
+  if (!reportPortalConfig.apiKey) {
+    if (strictReporting) {
+      throw new Error(
+        'RP_API_KEY is required when strict ReportPortal reporting is enabled',
+      );
+    }
+
+    return false;
+  }
+
+  try {
+    const endpoint = new URL(reportPortalConfig.endpoint);
+    if (
+      !['http:', 'https:'].includes(endpoint.protocol) ||
+      !['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname) ||
+      !/^\/api\/v2\/*$/.test(endpoint.pathname) ||
+      endpoint.username ||
+      endpoint.password ||
+      endpoint.href.includes('?') ||
+      endpoint.href.includes('#')
+    ) {
+      throw new Error();
+    }
+    reportPortalConfig.endpoint = endpoint.href;
+  } catch {
+    throw new Error('Invalid ReportPortal endpoint configuration');
+  }
+
+  return true;
+}

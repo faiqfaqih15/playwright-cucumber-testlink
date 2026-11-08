@@ -1,0 +1,21 @@
+export type TestLinkSelection =
+  | { kind: 'case'; externalIds: string[] }
+  | { kind: 'suite'; suiteId: string }
+  | { kind: 'plan'; planId: string };
+
+export interface ImportedTestStep {
+  order: number;
+  action: string;
+  expectedResult: string;
+}
+
+export interface ImportedTestCase {
+  projectId: string;
+  suiteId: string;
+  suiteName: string;
+  internalCaseId: string;
+  externalCaseId: string;
+  caseTitle: string;
+  preconditions?: string;
+  steps: ImportedTestStep[];
+}

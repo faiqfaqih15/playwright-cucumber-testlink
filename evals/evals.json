@@ -1,0 +1,56 @@
+{
+  "cases": [
+    {
+      "prompt": "Read TestLink case PROJ-123 and preview a Cucumber scenario.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Import TestLink suite 456 into one feature file.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Synchronize existing scenarios with TestLink plan 12.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Scaffold Cucumber.js with Playwright and TypeScript.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Diagnose this failed Cucumber Playwright trace.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Configure local ReportPortal for Cucumber results.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Convert this native @playwright/test suite to Cucumber.js with Playwright.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Use Playwright to scrape a public product page.",
+      "expected": "do_not_trigger"
+    },
+    {
+      "prompt": "Write a native @playwright/test spec without Cucumber.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Maintain this mixed @playwright/test and Cucumber.js repository without converting the native tests.",
+      "expected": "trigger"
+    },
+    {
+      "prompt": "Design a PostgreSQL production migration.",
+      "expected": "do_not_trigger"
+    },
+    {
+      "prompt": "Install Docker Desktop.",
+      "expected": "do_not_trigger"
+    },
+    {
+      "prompt": "Explain Gherkin generally without changing automation.",
+      "expected": "do_not_trigger"
+    }
+  ]
+}

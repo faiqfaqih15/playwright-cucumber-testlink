@@ -1,0 +1,319 @@
+import type {
+  ImportedTestCase,
+  ImportedTestStep,
+  TestLinkSelection,
+} from './testlink-model';
+
+export type TestLinkReadMethod =
+  | 'tl.getTestCase'
+  | 'tl.getTestCasesForTestSuite'
+  | 'tl.getTestCasesForTestPlan';
+
+export type TestLinkCall = (
+  method: string,
+  params: Readonly<Record<string, unknown>>,
+) => Promise<unknown>;
+
+const READ_METHODS: readonly TestLinkReadMethod[] = [
+  'tl.getTestCase',
+  'tl.getTestCasesForTestSuite',
+  'tl.getTestCasesForTestPlan',
+];
+
+export function assertReadOnlyMethod(
+  method: string,
+): asserts method is TestLinkReadMethod {
+  if (!READ_METHODS.includes(method as TestLinkReadMethod)) {
+    throw new Error(`TestLink method is outside the read-only allowlist: ${method}`);
+  }
+}
+
+type RawRecord = Record<string, unknown>;
+type ReadRequest =
+  | {
+      kind: 'case';
+      method: TestLinkReadMethod;
+      params: Readonly<Record<string, unknown>>;
+      externalCaseId: string;
+    }
+  | {
+      kind: 'suite';
+      method: TestLinkReadMethod;
+      params: Readonly<Record<string, unknown>>;
+      suiteId: string;
+    }
+  | {
+      kind: 'plan';
+      method: TestLinkReadMethod;
+      params: Readonly<Record<string, unknown>>;
+      planId: string;
+    };
+
+function asRecord(value: unknown, label: string): RawRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as RawRecord;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    throw new Error(`${label} is missing`);
+  }
+  const normalized = String(value).trim();
+  if (!normalized) {
+    throw new Error(`${label} is empty`);
+  }
+  return normalized;
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  return requiredString(value, label);
+}
+
+function hasCaseIdentity(value: RawRecord): boolean {
+  return [
+    'id',
+    'internalCaseId',
+    'testcase_id',
+    'tcase_id',
+    'external_id',
+    'full_external_id',
+    'full_tc_external_id',
+    'tc_external_id',
+    'externalCaseId',
+  ].some((key) => key in value);
+}
+
+function collectCases(value: unknown, label = 'response'): RawRecord[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => collectCases(item, `${label}[${index}]`));
+  }
+
+  const record = asRecord(value, label);
+  if (hasCaseIdentity(record)) {
+    return [record];
+  }
+
+  const entries = Object.entries(record);
+  if (entries.length === 0) {
+    return [];
+  }
+  return entries.flatMap(([key, item]) => collectCases(item, `${label}.${key}`));
+}
+
+function normalizeStep(value: unknown, index: number): ImportedTestStep {
+  const step = asRecord(value, `steps[${index}]`);
+  const rawOrder = step.order ?? step.step_number;
+  const order = Number(rawOrder);
+  if (!Number.isInteger(order) || order < 1) {
+    throw new Error(`steps[${index}].order must be a positive integer`);
+  }
+
+  return {
+    order,
+    action: requiredString(step.action ?? step.actions, `steps[${index}].action`),
+    expectedResult: requiredString(
+      step.expectedResult ?? step.expected_results,
+      `steps[${index}].expectedResult`,
+    ),
+  };
+}
+
+function normalizeExternalCaseId(
+  value: RawRecord,
+  projectPrefix: string | undefined,
+): string {
+  const fullExternalId = value.externalCaseId
+    ?? value.full_external_id
+    ?? value.full_tc_external_id
+    ?? value.external_id;
+  if (fullExternalId !== undefined && fullExternalId !== null) {
+    return requiredString(fullExternalId, 'externalCaseId');
+  }
+  if (value.tc_external_id === undefined || value.tc_external_id === null) {
+    return requiredString(undefined, 'externalCaseId');
+  }
+  const tcExternalId = requiredString(value.tc_external_id, 'tc_external_id');
+  const prefix = requiredString(projectPrefix, 'projectPrefix');
+  return `${prefix}-${tcExternalId}`;
+}
+
+function normalizeCase(
+  value: RawRecord,
+  projectId: string | undefined,
+  projectPrefix: string | undefined,
+): ImportedTestCase {
+  if (!Array.isArray(value.steps) || value.steps.length === 0) {
+    throw new Error('TestLink case steps are missing or empty');
+  }
+  const steps = value.steps.map(normalizeStep).sort((left, right) => left.order - right.order);
+  if (new Set(steps.map((step) => step.order)).size !== steps.length) {
+    throw new Error('TestLink case has duplicate step order values');
+  }
+
+  return {
+    projectId: requiredString(
+      value.projectId ?? value.testproject_id ?? value.tproject_id ?? projectId,
+      'projectId',
+    ),
+    suiteId: requiredString(
+      value.suiteId ?? value.testsuite_id ?? value.tsuite_id ?? value.parent_id,
+      'suiteId',
+    ),
+    suiteName: requiredString(
+      value.suiteName ?? value.testsuite_name ?? value.tsuite_name,
+      'suiteName',
+    ),
+    internalCaseId: requiredString(
+      value.internalCaseId ?? value.testcase_id ?? value.tcase_id ?? value.id,
+      'internalCaseId',
+    ),
+    externalCaseId: normalizeExternalCaseId(value, projectPrefix),
+    caseTitle: requiredString(value.caseTitle ?? value.name, 'caseTitle'),
+    preconditions: optionalString(value.preconditions, 'preconditions'),
+    steps,
+  };
+}
+
+function assertUniqueExternalIds(cases: ImportedTestCase[]): void {
+  const externalIds = cases.map((testCase) => testCase.externalCaseId);
+  if (new Set(externalIds).size !== externalIds.length) {
+    throw new Error('TestLink selection returned duplicate external case IDs');
+  }
+}
+
+function assertConsistentSuiteNames(cases: ImportedTestCase[]): void {
+  const suiteNames = new Map<string, string>();
+  for (const testCase of cases) {
+    const suiteName = suiteNames.get(testCase.suiteId);
+    if (suiteName !== undefined && suiteName !== testCase.suiteName) {
+      throw new Error(
+        `TestLink selection returned conflicting names for suite ID ${testCase.suiteId}`,
+      );
+    }
+    suiteNames.set(testCase.suiteId, testCase.suiteName);
+  }
+}
+
+function normalizeResponse(
+  response: unknown,
+  projectId: string | undefined,
+  projectPrefix: string | undefined,
+): ImportedTestCase[] {
+  const cases = collectCases(response).map(
+    (value) => normalizeCase(value, projectId, projectPrefix),
+  );
+  if (cases.length === 0) {
+    throw new Error('TestLink selection returned no test cases');
+  }
+  assertUniqueExternalIds(cases);
+  return cases;
+}
+
+function validateSelectionResponse(
+  request: ReadRequest,
+  response: unknown,
+  projectId: string | undefined,
+  projectPrefix: string | undefined,
+): ImportedTestCase[] {
+  const cases = normalizeResponse(response, projectId, projectPrefix);
+
+  if (request.kind === 'case') {
+    if (!cases.some((testCase) => testCase.externalCaseId === request.externalCaseId)) {
+      throw new Error('TestLink response is missing the requested external case ID');
+    }
+    if (cases.some((testCase) => testCase.externalCaseId !== request.externalCaseId)) {
+      throw new Error('TestLink response contains an unexpected external case ID');
+    }
+  }
+
+  if (
+    request.kind === 'suite'
+    && cases.some((testCase) => testCase.suiteId !== request.suiteId)
+  ) {
+    throw new Error('TestLink response contains a case outside the requested suite');
+  }
+
+  return cases;
+}
+
+function groupByOriginalSuite(cases: ImportedTestCase[]): ImportedTestCase[] {
+  const groups = new Map<string, ImportedTestCase[]>();
+  for (const testCase of cases) {
+    const group = groups.get(testCase.suiteId) ?? [];
+    group.push(testCase);
+    groups.set(testCase.suiteId, group);
+  }
+  return [...groups.values()].flat();
+}
+
+function nonEmpty(value: string, label: string): string {
+  return requiredString(value, label);
+}
+
+export class TestLinkReadClient {
+  constructor(
+    private readonly call: TestLinkCall,
+    private readonly projectId?: string,
+    private readonly projectPrefix?: string,
+  ) {}
+
+  async fetch(selection: TestLinkSelection): Promise<ImportedTestCase[]> {
+    let requests: ReadRequest[];
+
+    if (selection.kind === 'case') {
+      if (selection.externalIds.length === 0) {
+        throw new Error('At least one external case ID is required');
+      }
+      const externalIds = selection.externalIds.map((id) => nonEmpty(id, 'externalCaseId'));
+      if (new Set(externalIds).size !== externalIds.length) {
+        throw new Error('Duplicate requested external case IDs are not allowed');
+      }
+      requests = externalIds.map((externalCaseId) => ({
+        kind: 'case',
+        method: 'tl.getTestCase',
+        params: { testcaseexternalid: externalCaseId },
+        externalCaseId,
+      }));
+    } else if (selection.kind === 'suite') {
+      const suiteId = nonEmpty(selection.suiteId, 'suiteId');
+      requests = [{
+        kind: 'suite',
+        method: 'tl.getTestCasesForTestSuite',
+        params: { testsuiteid: suiteId, details: 'full', deep: false },
+        suiteId,
+      }];
+    } else {
+      const planId = nonEmpty(selection.planId, 'planId');
+      requests = [{
+        kind: 'plan',
+        method: 'tl.getTestCasesForTestPlan',
+        params: { testplanid: planId, getstepsinfo: true },
+        planId,
+      }];
+    }
+
+    const batches = await Promise.all(requests.map(async (request) => {
+      const { method, params } = request;
+      let response: unknown;
+      try {
+        assertReadOnlyMethod(method);
+        response = await this.call(method, params);
+      } catch {
+        throw new Error(
+          `TestLink ${request.kind} retrieval failed via ${request.method}`,
+        );
+      }
+      return validateSelectionResponse(request, response, this.projectId, this.projectPrefix);
+    }));
+
+    const cases = batches.flat();
+    assertUniqueExternalIds(cases);
+    assertConsistentSuiteNames(cases);
+    return groupByOriginalSuite(cases);
+  }
+}

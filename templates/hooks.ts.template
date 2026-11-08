@@ -1,0 +1,180 @@
+import { mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  After,
+  AfterAll,
+  Before,
+  BeforeAll,
+  Status,
+  type ITestCaseHookParameter,
+} from '@cucumber/cucumber';
+import {
+  chromium,
+  firefox,
+  request,
+  webkit,
+  type Browser,
+} from 'playwright';
+import { AutomationWorld } from './world';
+
+// Cucumber creates one module instance per worker process.
+let browser: Browser | undefined;
+
+const browserTypes = { chromium, firefox, webkit };
+const screenshotDirectory = 'artifacts/screenshots';
+const traceDirectory = 'artifacts/traces';
+
+type ReportPortalScenarioWorld = AutomationWorld & {
+  addScenarioAttributes(attributes: Array<{ key: string; value: string }>): void;
+  setScenarioTestCaseId(testCaseId: string): void;
+};
+
+function testLinkTagValue(
+  tags: readonly { name: string }[],
+  prefix: string,
+  kind: 'suite' | 'case',
+): string | undefined {
+  const matches = tags.filter(({ name }) => name.startsWith(prefix));
+  if (matches.length === 0) {
+    return undefined;
+  }
+
+  const value = matches.length === 1
+    ? matches[0].name.slice(prefix.length).trim()
+    : '';
+  if (!value) {
+    throw new Error(`Invalid TestLink ${kind} tag metadata`);
+  }
+
+  return value;
+}
+
+function applyTestLinkMetadata(
+  world: ReportPortalScenarioWorld,
+  tags: readonly { name: string }[],
+): void {
+  const suiteId = testLinkTagValue(tags, '@TestLinkSuite_', 'suite');
+  const caseId = testLinkTagValue(tags, '@TestLinkCase_', 'case');
+  const attributes: Array<{ key: string; value: string }> = [];
+
+  if (suiteId) {
+    world.testLinkSuiteId = suiteId;
+    attributes.push({ key: 'TestLinkSuiteId', value: suiteId });
+  }
+  if (caseId) {
+    world.testLinkCaseId = caseId;
+    attributes.push({ key: 'TestLinkCaseId', value: caseId });
+  }
+  if (attributes.length > 0) {
+    world.addScenarioAttributes(attributes);
+  }
+  if (caseId) {
+    world.setScenarioTestCaseId(caseId);
+  }
+}
+
+function selectedBrowser() {
+  const name = process.env.BROWSER ?? 'chromium';
+  if (!(name in browserTypes)) {
+    throw new Error(`Unsupported BROWSER value: ${name}`);
+  }
+  return browserTypes[name as keyof typeof browserTypes];
+}
+
+function sanitizeArtifactName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'scenario';
+}
+
+BeforeAll(async function () {
+  browser = await selectedBrowser().launch({
+    headless: process.env.HEADLESS !== 'false',
+  });
+});
+
+Before(async function (
+  this: AutomationWorld,
+  scenario: ITestCaseHookParameter,
+) {
+  applyTestLinkMetadata(this as ReportPortalScenarioWorld, scenario.pickle.tags);
+
+  if (!browser) {
+    throw new Error('Worker browser was not initialized');
+  }
+
+  const context = await browser.newContext({
+    baseURL: process.env.APP_BASE_URL,
+  });
+  this.browserContext = context;
+  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  this.page = await context.newPage();
+  this.api = await request.newContext({ baseURL: process.env.APP_BASE_URL });
+});
+
+After(async function (
+  this: AutomationWorld,
+  scenario: ITestCaseHookParameter,
+) {
+  const context = this.browserContext;
+  // Use Cucumber's generated ID, never scenario names or parameters, in artifacts.
+  const artifactId = sanitizeArtifactName(scenario.pickle.id);
+  const screenshotPath = join(screenshotDirectory, `failure-${artifactId}.png`);
+  const tracePath = join(traceDirectory, `trace-${artifactId}.zip`);
+
+  try {
+    if (context && scenario.result?.status === Status.FAILED) {
+      const evidenceErrors: unknown[] = [];
+      try {
+        if (this.page) {
+          await mkdir(screenshotDirectory, { recursive: true });
+          await this.page.screenshot({
+            path: screenshotPath,
+            type: 'png',
+            fullPage: true,
+          });
+          this.attach(await readFile(screenshotPath), {
+            mediaType: 'image/png',
+            fileName: `failure-${artifactId}.png`,
+          });
+        }
+      } catch (error) {
+        evidenceErrors.push(error);
+      }
+
+      try {
+        await mkdir(traceDirectory, { recursive: true });
+        await context.tracing.stop({ path: tracePath });
+        this.attach(await readFile(tracePath), {
+          mediaType: 'application/zip',
+          fileName: `trace-${artifactId}.zip`,
+        });
+      } catch (error) {
+        evidenceErrors.push(error);
+      }
+
+      if (evidenceErrors.length > 0) {
+        throw evidenceErrors[0];
+      }
+    } else if (context) {
+      await context.tracing.stop();
+    }
+  } finally {
+    try {
+      await this.api?.dispose();
+    } finally {
+      try {
+        if (context) {
+          await context.close();
+        }
+      } finally {
+        this.api = undefined;
+        this.page = undefined;
+        this.browserContext = undefined;
+      }
+    }
+  }
+});
+
+AfterAll(async function () {
+  await browser?.close();
+  browser = undefined;
+});

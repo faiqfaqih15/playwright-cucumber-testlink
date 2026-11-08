@@ -1,0 +1,8 @@
+@TestLinkSuite_456
+Feature: Authentication
+
+  @TestLinkCase_PROJ-123
+  Scenario: Reject an incorrect password
+    Given the user is on the login page
+    When the user signs in with an incorrect password
+    Then an invalid-credentials message is displayed

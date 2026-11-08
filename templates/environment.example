@@ -1,0 +1,11 @@
+APP_BASE_URL=http://localhost:3000
+BROWSER=chromium
+HEADLESS=true
+TESTLINK_URL=https://testlink.example.invalid/lib/api/xmlrpc/v1/xmlrpc.php
+TESTLINK_API_TOKEN=replace-with-local-secret
+RP_ENDPOINT=http://localhost:8080/api/v2
+RP_PROJECT=playwright_automation
+RP_LAUNCH=Local regression
+RP_API_KEY=replace-with-local-secret
+RP_REPORTING_ENABLED=false
+RP_STRICT_REPORTING=false

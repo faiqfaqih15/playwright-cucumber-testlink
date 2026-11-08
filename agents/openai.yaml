@@ -1,0 +1,7 @@
+interface:
+  display_name: "Playwright Cucumber TestLink"
+  short_description: "Playwright Test or Cucumber automation with TestLink"
+  default_prompt: "Use $playwright-cucumber-testlink to inspect this repository and propose the requested TypeScript automation change, using Playwright Test for Playwright-only suites or Cucumber.js for Cucumber suites, with optional read-only TestLink or local ReportPortal integration."
+
+policy:
+  allow_implicit_invocation: true
